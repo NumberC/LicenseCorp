@@ -1,14 +1,31 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 import httpx
 import os
+import json
 
 app = FastAPI()
+
+# Replace this with the domain of your frontend if deployed
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # or ["*"] to allow all
+    allow_credentials=True,
+    allow_methods=["*"],    # ["GET", "POST", etc.] if you want to restrict
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup_event():
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     app.state.redis = Redis.from_url(redis_url, decode_responses=True)
+    app.state.pubsub_redis = Redis.from_url(redis_url, decode_responses=True)
     app.state.http_client = httpx.AsyncClient()
 
 @app.on_event("shutdown")
@@ -34,9 +51,15 @@ async def add_task(uuid: str = None, description: str = None, complete: bool = F
     try:
         await app.state.redis.rpush(uuid, description)
         await app.state.redis.rpush(uuid, str(complete).lower())
+        await app.state.pubsub_redis.publish("tasks_changed", json.dumps({
+            "action": "add",
+            "uuid": uuid,
+            "description": description,
+            "complete": complete
+        }))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
     return {"uuid": uuid, "description": description, "complete": str(complete).lower()}
 
 @app.get("/tasks/")
@@ -71,6 +94,12 @@ async def update_task(uuid: str, request: Request):
 
         await r.lset(uuid, 0, description)
         await r.lset(uuid, 1, str(complete).lower())
+        await app.state.pubsub_redis.publish("tasks_changed", json.dumps({
+            "action": "edit",
+            "uuid": uuid,
+            "description": description,
+            "complete": complete
+        }))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -84,5 +113,25 @@ async def delete_task(uuid: str):
         raise HTTPException(status_code=404, detail="No item with this UUID exists.")
     
     await r.delete(uuid)
+    await app.state.pubsub_redis.publish("tasks_changed", json.dumps({
+        "action": "delete",
+        "uuid": uuid
+    }))
 
-    return {"message": f"Task with id {uuid} has been deleted."}
+    return {"message": f"Task with id {uuid} has been deleted."}    
+
+@app.websocket("/ws/tasks_changed")
+async def task_added_websocket(websocket: WebSocket):
+    print("Websocket connection established")
+    await websocket.accept()
+    r = app.state.pubsub_redis
+    pubsub = r.pubsub()
+    
+    await pubsub.subscribe("tasks_changed")
+    try:
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                await websocket.send_text(message["data"])
+    except WebSocketDisconnect:
+        print("Client disconnected")
+        await pubsub.unsubscribe("tasks_changed")
