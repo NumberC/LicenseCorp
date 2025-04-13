@@ -3,7 +3,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { createTask, getTasks, updateTask } from './app';
+import { createTask, deleteTask, getTasks, updateTask } from './app';
 
 interface TodoItem {
   id: string;
@@ -56,7 +56,7 @@ export default function Home() {
           console.log("Adding task:", task);
           setTodos((prev) => [
             ...prev,
-            { id: task.id, description: task.description, complete: task.complete },
+            { id: task.uuid, description: task.description, complete: task.complete },
           ]);
         } else if(task.action === 'edit') {
           console.log("Updating task:", task);
@@ -69,7 +69,7 @@ export default function Home() {
           );
         } else if(task.action === 'delete') {
           console.log("Deleting task:", task);
-          setTodos((prev) => prev.filter((todo) => todo.id !== task.id));
+          setTodos((prev) => prev.filter((todo) => todo.id !== task.uuid));
         }
       };
   
@@ -128,6 +128,15 @@ export default function Home() {
               todo.complete ? 'line-through text-opacity-70' : ''
             } focus:outline-none`}
             />
+            <button
+              style={{ position:'relative', right: '10px' }}
+              onClick={() => {
+                if(todo.id) deleteTask(todo.id);
+              }}
+              className="ml-3 text-red-500 hover:text-red-700"
+            >
+              X
+            </button>
         </div>
       ))}
 
