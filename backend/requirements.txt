@@ -1,1 +1,4 @@
 fastapi
+uvicorn
+redis
+httpx
